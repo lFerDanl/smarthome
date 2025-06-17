@@ -3,8 +3,10 @@ import 'package:speech_to_text/speech_to_text.dart' as stt;
 import 'package:speech_to_text/speech_recognition_result.dart';
 import 'package:flutter_tts/flutter_tts.dart';
 import 'package:sensors_plus/sensors_plus.dart';
+import 'package:http/http.dart' as http;
 import 'dart:async';
 import 'dart:math';
+import 'dart:convert';
 
 void main() {
   runApp(VoiceApp());
@@ -14,7 +16,7 @@ class VoiceApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'Control por Voz',
+      title: 'Smart Home Voice Control',
       theme: ThemeData.dark().copyWith(
         scaffoldBackgroundColor: Colors.black,
         primaryColor: Colors.blueAccent,
@@ -22,6 +24,99 @@ class VoiceApp extends StatelessWidget {
       home: VoiceHome(),
       debugShowCheckedModeBanner: false,
     );
+  }
+}
+
+
+
+class GeminiService {
+  static const String apiKey = 'TU-API-KEY'; // Reemplaza con tu API key
+  static const String baseUrl = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent'; 
+
+  static Future<Map<String, dynamic>> processCommand(String userInput) async {
+    String prompt = '''
+Eres un asistente de smart home que debe analizar comandos de voz y responder en formato JSON.
+
+Analiza este comando: "$userInput"
+
+DISPOSITIVOS DISPONIBLES:
+1. foco_sala (light): Foco inteligente de la sala
+   - Acciones: turn_on, turn_off, set_brightness, set_color, set_temperature
+   - Parámetros: brightness (0-100), color (red, green, blue, white, etc), temperature (2700-6500K)
+
+2. termostato_principal (thermostat): Termostato principal
+   - Acciones: turn_on, turn_off, set_temperature, set_mode, set_fan_speed
+   - Parámetros: temperature (16-30°C), mode (auto, cool, heat), fan_speed (low, medium, high)
+
+3. persiana_dormitorio (blind): Persiana del dormitorio
+   - Acciones: turn_on (abrir), turn_off (cerrar), set_position
+   - Parámetros: position (0-100, donde 0=cerrada, 100=abierta)
+
+CASOS DE RESPUESTA:
+1. Si el mensaje no tiene sentido o no está relacionado con smart home:
+   {"type": "error", "message": "Comando no comprendido. Por favor, di un comando relacionado con el control del hogar."}
+
+2. Si hay intención de smart home pero la función no existe:
+   {"type": "error", "message": "Esa función no está disponible en esta aplicación."}
+
+3. Si el comando es válido:
+   {"type": "success", "message": "MENSAJE", "command": {"device_id": "ID_DISPOSITIVO", "action": "ACCION", "parameters": {"key": "value"}}}
+
+INSTRUCCIONES ESPECIALES
+- Para el MENSAJE coloca la intención del usuario en forma de ejecutado por ejemplo, prende la luz : mensaje -> se ha prendido la luz.
+
+Responde SOLO con el JSON, sin texto adicional.
+''';
+
+    try {
+      final response = await http.post(
+        Uri.parse('$baseUrl?key=$apiKey'),
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: jsonEncode({
+          'contents': [
+            {
+              'parts': [
+                {
+                  'text': prompt
+                }
+              ]
+            }
+          ],
+          'generationConfig': {
+            'temperature': 0.1,
+            'topK': 1,
+            'topP': 1,
+            'maxOutputTokens': 2048,
+          }
+        }),
+      );
+
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        String responseText = data['candidates'][0]['content']['parts'][0]['text'];
+        
+        // Limpiar la respuesta para extraer solo el JSON
+        responseText = responseText.trim();
+        if (responseText.startsWith('```json')) {
+          responseText = responseText.substring(7);
+        }
+        if (responseText.endsWith('```')) {
+          responseText = responseText.substring(0, responseText.length - 3);
+        }
+        
+        return jsonDecode(responseText);
+      } else {
+        throw Exception('Error en la API: ${response.statusCode}');
+      }
+    } catch (e) {
+      print('Error procesando comando: $e');
+      return {
+        'type': 'error',
+        'message': 'Error al procesar el comando. Intenta de nuevo.',
+      };
+    }
   }
 }
 
@@ -35,12 +130,14 @@ class _VoiceHomeState extends State<VoiceHome> {
   late FlutterTts _flutterTts;
   bool _isListening = false;
   bool _speechEnabled = false;
+  bool _isProcessing = false;
   String _recognizedText = 'Di un comando...';
-  String _completeText = ''; // Para acumular todo el texto reconocido
+  String _completeText = '';
+  String _lastResponse = '';
   
   // Para detectar movimiento
   late StreamSubscription<AccelerometerEvent> _accelerometerSubscription;
-  double _shakeThreshold = 15.0; // Umbral para detectar movimiento brusco
+  double _shakeThreshold = 15.0;
   DateTime _lastShakeTime = DateTime.now();
   
   // Timer para manejar el silencio
@@ -93,9 +190,9 @@ class _VoiceHomeState extends State<VoiceHome> {
     
     if (acceleration > _shakeThreshold) {
       DateTime now = DateTime.now();
-      if (now.difference(_lastShakeTime).inMilliseconds > 1000) { // Evitar activaciones múltiples
+      if (now.difference(_lastShakeTime).inMilliseconds > 1000) {
         _lastShakeTime = now;
-        if (_speechEnabled && !_isListening) {
+        if (_speechEnabled && !_isListening && !_isProcessing) {
           _activateVoiceWithMessage();
         }
       }
@@ -103,18 +200,13 @@ class _VoiceHomeState extends State<VoiceHome> {
   }
 
   void _activateVoiceWithMessage() async {
-    // Primero reproducir el mensaje
     await _speak("¿Qué deseas realizar?");
-    
-    // Esperar un momento después del mensaje para iniciar la captura
     await Future.delayed(Duration(milliseconds: 500));
-    
-    // Ahora iniciar la escucha
     _startListening();
   }
 
   void _startListening() {
-    if (!_isListening && _speechEnabled) {
+    if (!_isListening && _speechEnabled && !_isProcessing) {
       setState(() {
         _isListening = true;
         _completeText = '';
@@ -135,8 +227,8 @@ class _VoiceHomeState extends State<VoiceHome> {
         onResult: (SpeechRecognitionResult result) {
           _handleSpeechResult(result);
         },
-        listenFor: Duration(minutes: 10), // Tiempo máximo
-        pauseFor: Duration(seconds: 5), // Pausa de 5 segundos
+        listenFor: Duration(minutes: 10),
+        pauseFor: Duration(seconds: 5),
         partialResults: true,
         localeId: "es_ES",
         cancelOnError: false,
@@ -161,14 +253,12 @@ class _VoiceHomeState extends State<VoiceHome> {
         _recognizedText = currentWords;
       });
       
-      // Si es resultado final, agregarlo al texto completo
       if (result.finalResult) {
         if (_completeText.isNotEmpty && !_completeText.endsWith(' ')) {
           _completeText += ' ';
         }
         _completeText += currentWords;
         
-        // Reiniciar la escucha para continuar
         Future.delayed(Duration(milliseconds: 100), () {
           if (_isListening) {
             _listenContinuously();
@@ -176,14 +266,13 @@ class _VoiceHomeState extends State<VoiceHome> {
         });
       }
       
-      // Iniciar timer de silencio
       _startSilenceTimer();
     }
   }
 
   void _startSilenceTimer() {
     _cancelSilenceTimer();
-    _silenceTimer = Timer(Duration(seconds: 5), () {
+    _silenceTimer = Timer(Duration(seconds: 3), () {
       if (_isListening && _hasSpokenSomething) {
         _finishListening();
       }
@@ -195,32 +284,67 @@ class _VoiceHomeState extends State<VoiceHome> {
     _silenceTimer = null;
   }
 
-  void _finishListening() {
+  void _finishListening() async {
     _cancelSilenceTimer();
     
     if (_isListening) {
       setState(() {
         _isListening = false;
+        _isProcessing = true;
         if (_completeText.isNotEmpty) {
           _recognizedText = _completeText;
         } else if (_recognizedText.isEmpty || _recognizedText == 'Escuchando...') {
           _recognizedText = 'No se detectó voz';
+          _isProcessing = false;
+          return;
         }
       });
       
       _speech.stop();
       
-      // Reproducir el texto completo si hay contenido
+      // Procesar comando con Gemini
       if (_completeText.isNotEmpty) {
-        _speak(_completeText);
+        await _processWithGemini(_completeText);
       }
+    }
+  }
+
+  Future<void> _processWithGemini(String userInput) async {
+    setState(() {
+      _recognizedText = 'Procesando comando...';
+    });
+
+    try {
+      Map<String, dynamic> result = await GeminiService.processCommand(userInput);
+      
+      setState(() {
+        _isProcessing = false;
+        _lastResponse = result['message'];
+        _recognizedText = '"$userInput"';
+      });
+
+      // Ejecutar comando si es exitoso
+      if (result['type'] == 'success' && result.containsKey('command')) {
+        // Aquí más adelante se implementará la lógica para controlar dispositivos reales
+        print('Comando a ejecutar: ${result['command']}');
+      }
+
+      // Reproducir respuesta con TTS
+      await _speak(result['message']);
+      
+    } catch (e) {
+      setState(() {
+        _isProcessing = false;
+        _lastResponse = 'Error al procesar el comando';
+        _recognizedText = '"$userInput"';
+      });
+      
+      await _speak('Error al procesar el comando. Intenta de nuevo.');
     }
   }
 
   void _handleListeningEnd() {
     if (_isListening) {
-      // Si se terminó la sesión actual pero aún estamos en modo escucha,
-      // intentar continuar
       if (_hasSpokenSomething) {
         Future.delayed(Duration(milliseconds: 200), () {
           if (_isListening) {
@@ -235,10 +359,8 @@ class _VoiceHomeState extends State<VoiceHome> {
 
   void _listen() async {
     if (_isListening) {
-      // Si ya está escuchando, detener
       _finishListening();
-    } else {
-      // Iniciar escucha directamente (sin mensaje de voz)
+    } else if (!_isProcessing) {
       _startListening();
     }
   }
@@ -262,30 +384,34 @@ class _VoiceHomeState extends State<VoiceHome> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: Text('Control por Voz'),
+        title: Text('Smart Home Control'),
         centerTitle: true,
         backgroundColor: Colors.transparent,
         elevation: 0,
       ),
-      body: Center(
+      body: SingleChildScrollView(
         child: Padding(
           padding: EdgeInsets.symmetric(horizontal: 24),
           child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
             children: [
+              SizedBox(height: 30),
+              // Icono principal
               Icon(
-                Icons.lightbulb_outline,
+                Icons.home_outlined,
                 size: 60,
-                color: Colors.amber,
+                color: Colors.blueAccent,
               ),
               SizedBox(height: 30),
+              
+              // Texto reconocido
               Container(
+                width: double.infinity,
                 padding: EdgeInsets.all(20),
                 decoration: BoxDecoration(
                   color: Colors.grey[900],
                   borderRadius: BorderRadius.circular(15),
                   border: Border.all(
-                    color: _isListening ? Colors.red : Colors.blueAccent,
+                    color: _isListening ? Colors.red : (_isProcessing ? Colors.orange : Colors.blueAccent),
                     width: 2,
                   ),
                 ),
@@ -293,77 +419,119 @@ class _VoiceHomeState extends State<VoiceHome> {
                   _recognizedText,
                   textAlign: TextAlign.center,
                   style: TextStyle(
-                    fontSize: 24,
+                    fontSize: 20,
                     color: Colors.white70,
                     height: 1.3,
                   ),
                 ),
               ),
+              
+              // Respuesta de Gemini
+              if (_lastResponse.isNotEmpty) ...[
+                SizedBox(height: 15),
+                Container(
+                  width: double.infinity,
+                  padding: EdgeInsets.all(16),
+                  decoration: BoxDecoration(
+                    color: Colors.green.withOpacity(0.1),
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: Colors.green, width: 1),
+                  ),
+                  child: Row(
+                    children: [
+                      Icon(Icons.check_circle, color: Colors.green, size: 20),
+                      SizedBox(width: 10),
+                      Expanded(
+                        child: Text(
+                          _lastResponse,
+                          style: TextStyle(
+                            color: Colors.green,
+                            fontSize: 16,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+              
               SizedBox(height: 20),
+              
               // Indicador de estado
               Container(
-                padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                padding: EdgeInsets.symmetric(horizontal: 16, vertical: 10),
                 decoration: BoxDecoration(
                   color: _speechEnabled 
-                    ? (_isListening ? Colors.red.withOpacity(0.2) : Colors.green.withOpacity(0.2))
+                    ? (_isListening ? Colors.red.withOpacity(0.2) : 
+                       (_isProcessing ? Colors.orange.withOpacity(0.2) : Colors.green.withOpacity(0.2)))
                     : Colors.grey.withOpacity(0.2),
-                  borderRadius: BorderRadius.circular(20),
+                  borderRadius: BorderRadius.circular(25),
                 ),
                 child: Text(
                   _speechEnabled 
-                    ? (_isListening ? '🎙️ Escuchando... (5s de silencio para finalizar)' : '📱 Agita el teléfono o toca el micrófono')
+                    ? (_isListening ? '🎙️ Escuchando... (3s de silencio para finalizar)' : 
+                       (_isProcessing ? '🤖 Procesando con Gemini...' : '📱 Agita el teléfono o toca el micrófono'))
                     : '❌ Reconocimiento no disponible',
                   style: TextStyle(
                     color: _speechEnabled 
-                      ? (_isListening ? Colors.red : Colors.green)
+                      ? (_isListening ? Colors.red : 
+                         (_isProcessing ? Colors.orange : Colors.green))
                       : Colors.grey,
                     fontWeight: FontWeight.bold,
                   ),
                   textAlign: TextAlign.center,
                 ),
               ),
-              SizedBox(height: 50),
+              
+              SizedBox(height: 40),
+              
+              // Botón de micrófono
               GestureDetector(
                 onTap: _speechEnabled ? _listen : null,
                 child: AnimatedContainer(
                   duration: Duration(milliseconds: 200),
                   child: CircleAvatar(
                     backgroundColor: _speechEnabled 
-                      ? (_isListening ? Colors.red : Colors.blueAccent)
+                      ? (_isListening ? Colors.red : 
+                         (_isProcessing ? Colors.orange : Colors.blueAccent))
                       : Colors.grey,
                     radius: 40,
                     child: Icon(
-                      _isListening ? Icons.mic : Icons.mic_none,
+                      _isListening ? Icons.mic : (_isProcessing ? Icons.sync : Icons.mic_none),
                       size: 40,
                       color: Colors.white,
                     ),
                   ),
                 ),
               ),
+              
               SizedBox(height: 20),
-              // Botón para reproducir texto
-              if (_recognizedText != 'Di un comando...' && 
-                  _recognizedText != 'Escuchando...' && 
-                  _recognizedText.isNotEmpty &&
-                  _recognizedText != 'No se detectó voz')
-                ElevatedButton.icon(
-                  onPressed: () => _speak(_recognizedText),
-                  icon: Icon(Icons.volume_up),
-                  label: Text('Repetir'),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: Colors.green,
-                  ),
-                ),
-              if (!_speechEnabled) ...[
-                SizedBox(height: 20),
-                ElevatedButton(
-                  onPressed: _initSpeech,
-                  child: Text('Reintentar Inicialización'),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: Colors.blueAccent,
-                  ),
-                ),
-              ],
+              
+              // Botones adicionales
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                children: [
+                  if (_lastResponse.isNotEmpty)
+                    ElevatedButton.icon(
+                      onPressed: () => _speak(_lastResponse),
+                      icon: Icon(Icons.volume_up),
+                      label: Text('Repetir'),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.green,
+                      ),
+                    ),
+                  if (!_speechEnabled)
+                    ElevatedButton(
+                      onPressed: _initSpeech,
+                      child: Text('Reiniciar'),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.blueAccent,
+                      ),
+                    ),
+                ],
+              ),
+              
+              SizedBox(height: 30),
             ],
           ),
         ),
