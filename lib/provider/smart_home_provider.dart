@@ -1,9 +1,9 @@
 import 'package:flutter/material.dart';
-import '../screens/tuya_devices_screen.dart' show TuyaDevice;
-import '../service/tuya_api_service.dart';
+import '../models/tuya_device.dart';
+import '../service/backend_api_service.dart';
 
 class SmartHomeProvider extends ChangeNotifier {
-  final TuyaApiService _apiService = TuyaApiService();
+  final BackendApiService _apiService = BackendApiService();
   List<TuyaDevice> _devices = [];
   bool _isLoading = false;
   String? _error;
@@ -28,9 +28,6 @@ class SmartHomeProvider extends ChangeNotifier {
     } catch (e) {
       _error = e.toString();
       _devices = [];
-      if (e.toString().contains('token invalid') || e.toString().contains('Failed to refresh')) {
-        await _apiService.clearToken();
-      }
     } finally {
       _isLoading = false;
       notifyListeners();

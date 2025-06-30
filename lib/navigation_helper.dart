@@ -1,14 +1,12 @@
 import 'package:flutter/material.dart';
 import 'screens/home_screen.dart';
 import 'screens/interface_screen.dart';
-import 'screens/tuya_devices_screen.dart';
 
 class NavigationHelper {
   static Map<String, WidgetBuilder> getRoutes() {
     return {
       '/home': (context) => const HomeScreen(),
       '/interface': (context) => const InterfaceScreen(),
-      '/tuya_devices': (context) => const TuyaDevicesScreen(),
     };
   }
 
@@ -18,10 +16,6 @@ class NavigationHelper {
 
   static void goToInterface(BuildContext context) {
     Navigator.pushNamed(context, '/interface');
-  }
-
-  static void goToTuyaDevices(BuildContext context) {
-    Navigator.pushNamed(context, '/tuya_devices');
   }
 
   // Método genérico para navegar por nombre de pantalla

@@ -14,6 +14,7 @@ void main() async {
     print('TUYA_CLIENT_ID: ${dotenv.env['TUYA_CLIENT_ID'] ?? 'NO CONFIGURADO'}');
     print('TUYA_CLIENT_SECRET: ${dotenv.env['TUYA_CLIENT_SECRET'] != null ? 'CONFIGURADO' : 'NO CONFIGURADO'}');
     print('TUYA_USER_ID: ${dotenv.env['TUYA_USER_ID'] ?? 'NO CONFIGURADO'}');
+    print('BACKEND_BASE_URL: ${dotenv.env['BACKEND_BASE_URL'] ?? 'http://localhost:3000'}');
   } catch (e) {
     print('❌ Error cargando variables de entorno: $e');
   }

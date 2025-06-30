@@ -73,18 +73,6 @@ class HomeScreen extends StatelessWidget {
             ),
             const Divider(),
             ListTile(
-              leading: const Icon(Icons.devices, color: Color.fromRGBO(50, 100, 200, 1.0)),
-              title: const Text(
-                'Dispositivos Tuya',
-                style: TextStyle(fontSize: 16, fontWeight: FontWeight.w500),
-              ),
-              onTap: () {
-                Navigator.pop(context); // Cierra el Drawer
-                NavigationHelper.goToTuyaDevices(context);
-              },
-            ),
-            const Divider(),
-            ListTile(
               leading: const Icon(Icons.settings, color: Colors.grey),
               title: const Text(
                 'Configuración',

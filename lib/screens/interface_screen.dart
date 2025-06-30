@@ -10,93 +10,8 @@ import 'dart:convert';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:provider/provider.dart';
 import '../provider/smart_home_provider.dart';
-import 'tuya_devices_screen.dart' show TuyaDevice;
-
-class GeminiService {
-  static String get apiKey => dotenv.env['GEMINI_API_KEY'] ?? '';
-  static const String baseUrl = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent';
-
-  static Future<Map<String, dynamic>> processCommand(String userInput) async {
-    String prompt = '''
-Eres un asistente de smart home que debe analizar comandos de voz y responder en formato JSON.
-
-Analiza este comando: "$userInput"
-
-DISPOSITIVOS DISPONIBLES:
-1. light (luz inteligente): Puedes controlar luces de diferentes habitaciones, por ejemplo: dormitorio, sala, cocina, etc.
-   - Acciones: turn_on, turn_off,, set_brightness set_color, set_color_temperature
-   - Parámetros:
-     - brightness (10-1000): nivel de brillo
-     - color (red, green, blue, yellow, purple, orange, pink, cyan, lime, indigo, white)
-     - color_temperature (0-1000): temperatura de color
-
-CASOS DE RESPUESTA:
-1. Si el mensaje no tiene sentido o no está relacionado con smart home:
-   {"type": "error", "message": "Comando no comprendido. Por favor, di un comando relacionado con el control del hogar."}
-
-2. Si hay intención de smart home pero la función o parámetro no existe o no es compatible con los dispositivos disponibles:
-   {"type": "error", "message": "No se puede realizar esa acción en los dispositivos disponibles. Por favor, revisa el comando."}
-
-3. Si el comando es válido:
-   {"type": "success", "message": "MENSAJE", "command": {type_device:"TIPO_DISPOSITIVO", "device_name": "NOMBRE_DISPOSITIVO", "action": "ACCION", "parameters": {"key": "value"}}}
-
-INSTRUCCIONES ESPECIALES
-- El device_name debe ser el nombre de la habitación o luz mencionado en el comando (por ejemplo, 'dormitorio', 'sala', 'luis', etc). Si no se menciona, intenta inferirlo del contexto. Si no se pudo coloca el device_name como light siempre que las acciones y parametros sean correctos.
-- Para el MENSAJE coloca la intención del usuario en forma de ejecutado, por ejemplo: prende la luz -> mensaje: "Se ha prendido la luz del dormitorio".
-- Responde SOLO con el JSON, sin texto adicional.
-''';
-
-    try {
-      final response = await http.post(
-        Uri.parse('$baseUrl?key=$apiKey'),
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: jsonEncode({
-          'contents': [
-            {
-              'parts': [
-                {
-                  'text': prompt
-                }
-              ]
-            }
-          ],
-          'generationConfig': {
-            'temperature': 0.1,
-            'topK': 1,
-            'topP': 1,
-            'maxOutputTokens': 2048,
-          }
-        }),
-      );
-
-      if (response.statusCode == 200) {
-        final data = jsonDecode(response.body);
-        String responseText = data['candidates'][0]['content']['parts'][0]['text'];
-        
-        // Limpiar la respuesta para extraer solo el JSON
-        responseText = responseText.trim();
-        if (responseText.startsWith('```json')) {
-          responseText = responseText.substring(7);
-        }
-        if (responseText.endsWith('```')) {
-          responseText = responseText.substring(0, responseText.length - 3);
-        }
-        
-        return jsonDecode(responseText);
-      } else {
-        throw Exception('Error en la API: ${response.statusCode}');
-      }
-    } catch (e) {
-      print('Error procesando comando: $e');
-      return {
-        'type': 'error',
-        'message': 'Error al procesar el comando. Intenta de nuevo.',
-      };
-    }
-  }
-}
+import '../models/tuya_device.dart';
+import '../service/backend_api_service.dart';
 
 class InterfaceScreen extends StatefulWidget {
   const InterfaceScreen({super.key});
@@ -123,6 +38,8 @@ class _InterfaceScreenState extends State<InterfaceScreen> {
   // Timer para manejar el silencio
   Timer? _silenceTimer;
   bool _hasSpokenSomething = false;
+
+  final BackendApiService _apiService = BackendApiService();
 
   @override
   void initState() {
@@ -327,7 +244,7 @@ class _InterfaceScreenState extends State<InterfaceScreen> {
     });
 
     try {
-      Map<String, dynamic> result = await GeminiService.processCommand(userInput);
+      Map<String, dynamic> result = await _apiService.processGeminiCommand(userInput);
       setState(() {
         _isProcessing = false;
         _lastResponse = result['message'] as String;
@@ -350,25 +267,10 @@ class _InterfaceScreenState extends State<InterfaceScreen> {
 
         // Buscar dispositivos coincidentes
         final provider = Provider.of<SmartHomeProvider>(context, listen: false);
-        print('DEBUG Gemini command:');
-        print(command);
-        print('DEBUG typeDevice: ' + typeDevice);
-        print('DEBUG deviceName: ' + deviceName);
-        print('DEBUG Lista de dispositivos disponibles:');
-        for (final d in provider.devices) {
-          print('  - name: \'${d.name}\', category: \'${d.category}\'');
-          print('    name (lower): \'${d.name.toLowerCase()}\', category (lower): \'${d.category.toLowerCase()}\'');
-          print('    name (trim): \'${d.name.toLowerCase().trim()}\', category (trim): \'${d.category.toLowerCase().trim()}\'');
-        }
-        print('DEBUG provider.devices.length: ${provider.devices.length}');
         final List<TuyaDevice> devices = provider.devices.where((d) =>
           isLightCategory(d.category) &&
           d.name.toLowerCase() == deviceName
         ).toList();
-        print('DEBUG Dispositivos filtrados: ${devices.length}');
-        for (final d in devices) {
-          print('  - name: \'${d.name}\', category: \'${d.category}\'');
-        }
 
         if (devices.isEmpty) {
           await _speak('No se encontró ningún dispositivo "$deviceName" de tipo "$typeDevice".');
@@ -456,6 +358,85 @@ class _InterfaceScreenState extends State<InterfaceScreen> {
   Future<void> _speak(String text) async {
     if (text.isNotEmpty) {
       await _flutterTts.speak(text);
+    }
+  }
+
+  // Métodos de debug para controlar el foco del dormitorio
+  Future<void> _debugTurnOnDormitorio() async {
+    try {
+      final provider = Provider.of<SmartHomeProvider>(context, listen: false);
+      
+      // Buscar el dispositivo "dormitorio"
+      final List<TuyaDevice> dormitorioDevices = provider.devices.where((d) =>
+        d.name.toLowerCase() == 'dormitorio' && isLightCategory(d.category)
+      ).toList();
+
+      if (dormitorioDevices.isEmpty) {
+        await _speak('No se encontró el foco del dormitorio');
+        setState(() {
+          _lastResponse = 'Error: No se encontró el foco del dormitorio';
+        });
+        return;
+      }
+
+      // Encender el primer dispositivo encontrado
+      final device = dormitorioDevices.first;
+      if (!device.isOn) {
+        await provider.toggleDevice(device);
+        await _speak('Foco del dormitorio encendido');
+        setState(() {
+          _lastResponse = '✅ Foco del dormitorio encendido';
+        });
+      } else {
+        await _speak('El foco del dormitorio ya está encendido');
+        setState(() {
+          _lastResponse = 'ℹ️ El foco del dormitorio ya está encendido';
+        });
+      }
+    } catch (e) {
+      await _speak('Error al encender el foco del dormitorio');
+      setState(() {
+        _lastResponse = '❌ Error al encender el foco del dormitorio: $e';
+      });
+    }
+  }
+
+  Future<void> _debugTurnOffDormitorio() async {
+    try {
+      final provider = Provider.of<SmartHomeProvider>(context, listen: false);
+      
+      // Buscar el dispositivo "dormitorio"
+      final List<TuyaDevice> dormitorioDevices = provider.devices.where((d) =>
+        d.name.toLowerCase() == 'dormitorio' && isLightCategory(d.category)
+      ).toList();
+
+      if (dormitorioDevices.isEmpty) {
+        await _speak('No se encontró el foco del dormitorio');
+        setState(() {
+          _lastResponse = 'Error: No se encontró el foco del dormitorio';
+        });
+        return;
+      }
+
+      // Apagar el primer dispositivo encontrado
+      final device = dormitorioDevices.first;
+      if (device.isOn) {
+        await provider.toggleDevice(device);
+        await _speak('Foco del dormitorio apagado');
+        setState(() {
+          _lastResponse = '✅ Foco del dormitorio apagado';
+        });
+      } else {
+        await _speak('El foco del dormitorio ya está apagado');
+        setState(() {
+          _lastResponse = 'ℹ️ El foco del dormitorio ya está apagado';
+        });
+      }
+    } catch (e) {
+      await _speak('Error al apagar el foco del dormitorio');
+      setState(() {
+        _lastResponse = '❌ Error al apagar el foco del dormitorio: $e';
+      });
     }
   }
 
@@ -590,6 +571,61 @@ class _InterfaceScreenState extends State<InterfaceScreen> {
                       color: Colors.white,
                     ),
                   ),
+                ),
+              ),
+              
+              SizedBox(height: 20),
+              
+              // Botones de Debug para el foco del dormitorio
+              Container(
+                width: double.infinity,
+                padding: EdgeInsets.all(16),
+                decoration: BoxDecoration(
+                  color: Colors.orange.withOpacity(0.1),
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: Colors.orange, width: 1),
+                ),
+                child: Column(
+                  children: [
+                    Row(
+                      children: [
+                        Icon(Icons.bug_report, color: Colors.orange, size: 20),
+                        SizedBox(width: 10),
+                        Text(
+                          'Debug - Foco Dormitorio',
+                          style: TextStyle(
+                            color: Colors.orange,
+                            fontSize: 16,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ],
+                    ),
+                    SizedBox(height: 15),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                      children: [
+                        ElevatedButton.icon(
+                          onPressed: () => _debugTurnOnDormitorio(),
+                          icon: Icon(Icons.lightbulb, color: Colors.white),
+                          label: Text('Encender'),
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: Colors.green,
+                            padding: EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+                          ),
+                        ),
+                        ElevatedButton.icon(
+                          onPressed: () => _debugTurnOffDormitorio(),
+                          icon: Icon(Icons.lightbulb_outline, color: Colors.white),
+                          label: Text('Apagar'),
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: Colors.red,
+                            padding: EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
                 ),
               ),
               
