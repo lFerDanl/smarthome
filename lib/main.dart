@@ -1,32 +1,38 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'navigation_helper.dart';
+import 'service/hybrid_background_service.dart';
+import 'service/backend_api_service.dart';
 import 'package:provider/provider.dart';
 import 'provider/smart_home_provider.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   
+  // Configurar cliente HTTP para manejar certificados SSL inseguros
+  setupUnsafeHttpClient();
+  
+  await dotenv.load(fileName: ".env");
+  
+  print('🚀 Inicializando servicio híbrido...');
   try {
-    await dotenv.load(fileName: ".env");
-    print('✅ Variables de entorno cargadas correctamente');
-    print('GEMINI_API_KEY: ${dotenv.env['GEMINI_API_KEY'] != null ? 'CONFIGURADO' : 'NO CONFIGURADO'}');
-    print('TUYA_CLIENT_ID: ${dotenv.env['TUYA_CLIENT_ID'] ?? 'NO CONFIGURADO'}');
-    print('TUYA_CLIENT_SECRET: ${dotenv.env['TUYA_CLIENT_SECRET'] != null ? 'CONFIGURADO' : 'NO CONFIGURADO'}');
-    print('TUYA_USER_ID: ${dotenv.env['TUYA_USER_ID'] ?? 'NO CONFIGURADO'}');
+    await HybridBackgroundService.initializeService();
+    print('✅ Servicio híbrido inicializado correctamente');
   } catch (e) {
-    print('❌ Error cargando variables de entorno: $e');
+    print('❌ Error inicializando servicio híbrido: $e');
   }
   
   runApp(
     ChangeNotifierProvider(
       create: (_) => SmartHomeProvider(),
-      child: MyApp(),
+      child: const MyApp(),
     ),
   );
 }
 
 class MyApp extends StatelessWidget {
+  const MyApp({super.key});
+
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
@@ -35,7 +41,7 @@ class MyApp extends StatelessWidget {
         scaffoldBackgroundColor: Colors.black,
         primaryColor: Colors.blueAccent,
       ),
-      initialRoute: '/home',
+      initialRoute: '/service_control',
       routes: NavigationHelper.getRoutes(),
       debugShowCheckedModeBanner: false,
     );

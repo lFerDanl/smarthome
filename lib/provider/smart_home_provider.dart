@@ -1,9 +1,9 @@
 import 'package:flutter/material.dart';
-import '../screens/tuya_devices_screen.dart' show TuyaDevice;
-import '../service/tuya_api_service.dart';
+import '../models/tuya_device.dart';
+import '../service/backend_api_service.dart';
 
 class SmartHomeProvider extends ChangeNotifier {
-  final TuyaApiService _apiService = TuyaApiService();
+  final BackendApiService _apiService = BackendApiService();
   List<TuyaDevice> _devices = [];
   bool _isLoading = false;
   String? _error;
@@ -28,9 +28,6 @@ class SmartHomeProvider extends ChangeNotifier {
     } catch (e) {
       _error = e.toString();
       _devices = [];
-      if (e.toString().contains('token invalid') || e.toString().contains('Failed to refresh')) {
-        await _apiService.clearToken();
-      }
     } finally {
       _isLoading = false;
       notifyListeners();
@@ -52,7 +49,9 @@ class SmartHomeProvider extends ChangeNotifier {
         'code': switchCode,
         'value': !currentState,
       }];
+      print('⚡ [toggleDevice] Enviando comando: $commands a deviceId: ${device.id} (actual: $currentState)');
       final success = await _apiService.controlDevice(device.id, commands);
+      print('⚡ [toggleDevice] Resultado controlDevice: $success');
       if (success) {
         final index = _devices.indexWhere((d) => d.id == device.id);
         if (index != -1) {
@@ -64,6 +63,7 @@ class SmartHomeProvider extends ChangeNotifier {
         notifyListeners();
       }
     } catch (e) {
+      print('❌ [toggleDevice] Error: $e');
       _error = e.toString();
       notifyListeners();
     }
@@ -72,24 +72,34 @@ class SmartHomeProvider extends ChangeNotifier {
   Future<void> setBrightness(TuyaDevice device, int brightness) async {
     try {
       final List<Map<String, dynamic>> commands = [];
+      String? code;
       if (device.status.containsKey('bright_value')) {
+        code = 'bright_value';
         commands.add({
-          'code': 'bright_value',
+          'code': code,
           'value': brightness,
         });
       } else if (device.status.containsKey('bright_value_v2')) {
+        code = 'bright_value_v2';
         commands.add({
-          'code': 'bright_value_v2',
+          'code': code,
           'value': brightness,
         });
       }
       if (commands.isNotEmpty) {
+        print('💡 [setBrightness] Enviando comando: $commands a deviceId: ${device.id}');
         final success = await _apiService.controlDevice(device.id, commands);
-        if (success) {
-          await loadDevices();
+        print('💡 [setBrightness] Resultado controlDevice: $success');
+        if (success && code != null) {
+          final index = _devices.indexWhere((d) => d.id == device.id);
+          if (index != -1) {
+            _devices[index].status[code] = brightness;
+            notifyListeners();
+          }
         }
       }
     } catch (e) {
+      print('❌ [setBrightness] Error: $e');
       _error = e.toString();
       notifyListeners();
     }
@@ -106,9 +116,11 @@ class SmartHomeProvider extends ChangeNotifier {
         'code': 'work_mode',
         'value': 'colour',
       });
+      String? code;
       if (device.status.containsKey('colour_data_v2')) {
+        code = 'colour_data_v2';
         commands.add({
-          'code': 'colour_data_v2',
+          'code': code,
           'value': {
             'h': hue,
             's': saturation,
@@ -116,21 +128,35 @@ class SmartHomeProvider extends ChangeNotifier {
           },
         });
       } else if (device.status.containsKey('colour_data')) {
+        code = 'colour_data';
         final String colorData = hue.toRadixString(16).padLeft(4, '0') +
                                  saturation.toRadixString(16).padLeft(4, '0') +
                                  value.toRadixString(16).padLeft(4, '0');
         commands.add({
-          'code': 'colour_data',
+          'code': code,
           'value': colorData,
         });
       }
       if (commands.isNotEmpty) {
+        print('🎨 [setColor] Enviando comando: $commands a deviceId: ${device.id}');
         final success = await _apiService.controlDevice(device.id, commands);
-        if (success) {
-          await loadDevices();
+        print('🎨 [setColor] Resultado controlDevice: $success');
+        if (success && code != null) {
+          final index = _devices.indexWhere((d) => d.id == device.id);
+          if (index != -1) {
+            if (code == 'colour_data_v2') {
+              _devices[index].status[code] = {'h': hue, 's': saturation, 'v': value};
+            } else if (code == 'colour_data') {
+              _devices[index].status[code] = hue.toRadixString(16).padLeft(4, '0') +
+                                             saturation.toRadixString(16).padLeft(4, '0') +
+                                             value.toRadixString(16).padLeft(4, '0');
+            }
+            notifyListeners();
+          }
         }
       }
     } catch (e) {
+      print('❌ [setColor] Error: $e');
       _error = e.toString();
       notifyListeners();
     }
@@ -143,24 +169,34 @@ class SmartHomeProvider extends ChangeNotifier {
         'code': 'work_mode',
         'value': 'white',
       });
+      String? code;
       if (device.status.containsKey('temp_value')) {
+        code = 'temp_value';
         commands.add({
-          'code': 'temp_value',
+          'code': code,
           'value': temperature,
         });
       } else if (device.status.containsKey('temp_value_v2')) {
+        code = 'temp_value_v2';
         commands.add({
-          'code': 'temp_value_v2',
+          'code': code,
           'value': temperature,
         });
       }
       if (commands.isNotEmpty) {
+        print('🌡️ [setColorTemperature] Enviando comando: $commands a deviceId: ${device.id}');
         final success = await _apiService.controlDevice(device.id, commands);
-        if (success) {
-          await loadDevices();
+        print('🌡️ [setColorTemperature] Resultado controlDevice: $success');
+        if (success && code != null) {
+          final index = _devices.indexWhere((d) => d.id == device.id);
+          if (index != -1) {
+            _devices[index].status[code] = temperature;
+            notifyListeners();
+          }
         }
       }
     } catch (e) {
+      print('❌ [setColorTemperature] Error: $e');
       _error = e.toString();
       notifyListeners();
     }

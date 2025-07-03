@@ -23,6 +23,9 @@ dependencies:
   flutter_dotenv: ^5.1.0
   shared_preferences: ^2.2.2
   provider: ^6.1.1
+  flutter_background_service: ^5.0.5
+  flutter_background_service_android: ^6.2.3
+  flutter_local_notifications: ^17.2.2
 
 dev_dependencies:
   flutter_test:
